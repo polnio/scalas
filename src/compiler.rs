@@ -91,7 +91,11 @@ impl<W: Write> Compiler<W> {
         write!(self.w, "exit:\n  mov rax, 60\n  syscall\n  ret\n")?;
         write!(
             self.w,
-            "println:\n  mov rsi, [rdi]\n  mov rdx, [rdi+8]\n  mov rax, 1\n  mov rdi, 1\n  syscall\n  mov rax, 1\n  mov rdi, 1\n  mov rsi, data.newline\n  mov rdx, 1\n  syscall\n  ret\n"
+            "print:\n  mov rsi, [rdi]\n  mov rdx, [rdi+8]\n  mov rax, 1\n  mov rdi, 1\n  syscall\n  ret\n"
+        )?;
+        write!(
+            self.w,
+            "println:\n  call print\n  mov rax, 1\n  mov rdi, 1\n  mov rsi, data.newline\n  mov rdx, 1\n  syscall\n  ret\n"
         )?;
 
         write!(self.w, "data.newline: db 10\n")?;
