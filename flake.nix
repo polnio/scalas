@@ -32,9 +32,10 @@
     in
     {
       devShells = forAllSystems (
-        { craneLib, ... }:
+        { pkgs, craneLib, ... }:
         {
           default = craneLib.devShell {
+            packages = with pkgs; [ fasm ];
           };
         }
       );

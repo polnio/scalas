@@ -1,9 +1,11 @@
 mod args;
+mod compiler;
 mod error;
 mod parser;
 
 use args::Args;
 use chumsky::Parser as _;
+use compiler::compile;
 use parser::parser;
 
 fn main() {
@@ -15,8 +17,8 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let result = match parser().parse(&src).into_result() {
-        Ok(result) => result,
+    let program = match parser().parse(&src).into_result() {
+        Ok(program) => program,
         Err(errs) => {
             let path_str = args.path.to_string_lossy().into_owned();
             for err in errs {
@@ -25,5 +27,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    dbg!(result);
+    if let Err(err) = compile(program, &args) {
+        eprintln!("{}", err);
+    }
 }

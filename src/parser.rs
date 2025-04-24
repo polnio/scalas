@@ -1,10 +1,10 @@
 use chumsky::prelude::*;
-use derive_more::Deref;
+use derive_more::{Deref, Display};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deref)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deref, Display)]
 pub struct Ident(String);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Display)]
 pub enum Literal {
     Number(i64),
     String(String),
@@ -30,8 +30,15 @@ pub struct Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assign {
+    pub ident: Ident,
+    pub expr: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Expr(Expr),
+    Assign(Assign),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,7 +55,12 @@ pub struct Object {
     pub fns: Vec<Fn>,
 }
 
-pub fn parser<'a>() -> impl Parser<'a, &'a str, Object, extra::Err<Rich<'a, char>>> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Program {
+    pub objects: Vec<Object>,
+}
+
+pub fn parser<'a>() -> impl Parser<'a, &'a str, Program, extra::Err<Rich<'a, char>>> {
     let ident = text::ascii::ident().map(|i: &str| Ident(i.to_owned()));
     let expr = recursive(|expr| {
         let literal = choice((
@@ -92,7 +104,13 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Object, extra::Err<Rich<'a, char
         })
     });
 
-    let stmt = choice((expr.map(Stmt::Expr),)).padded();
+    let assign = just("val ")
+        .ignore_then(ident)
+        .then_ignore(just('=').padded())
+        .then(expr.clone())
+        .map(|(ident, expr)| Assign { ident, expr });
+
+    let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr))).padded();
 
     let fn_ = group((
         just("def ").ignore_then(ident),
@@ -103,9 +121,11 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Object, extra::Err<Rich<'a, char
             .collect()
             .delimited_by(just('('), just(')')),
         just(':').padded().ignore_then(type_),
-        just('=')
-            .padded()
-            .ignore_then(stmt.repeated().collect().delimited_by(just('{'), just('}'))),
+        just('=').padded().ignore_then(
+            stmt.repeated()
+                .collect()
+                .delimited_by(just('{').padded(), just('}').padded()),
+        ),
     ))
     .padded()
     .map(|(ident, args, ret, body)| Fn {
@@ -124,5 +144,10 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Object, extra::Err<Rich<'a, char
     ))
     .map(|(ident, fns)| Object { ident, fns });
 
-    object
+    let program = object
+        .repeated()
+        .collect()
+        .map(|objects| Program { objects });
+
+    program
 }
