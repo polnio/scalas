@@ -299,8 +299,6 @@ dependencies = [
  "convert_case",
  "derive_more",
  "indexmap",
- "quote",
- "syn",
 ]
 
 [[package]]
