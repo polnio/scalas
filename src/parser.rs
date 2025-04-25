@@ -1,14 +1,12 @@
-use chumsky::prelude::*;
+use crate::error::Error;
+use crate::tokenizer::Token;
+use chumsky::{input::ValueInput, prelude::*};
 use derive_more::{Deref, Display};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deref, Display)]
 pub struct Ident(String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Display)]
-pub enum Literal {
-    Number(i64),
-    String(String),
-}
+pub type Literal = crate::tokenizer::Literal;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FnCall {
@@ -60,31 +58,26 @@ pub struct Program {
     pub objects: Vec<Object>,
 }
 
-pub fn parser<'a>() -> impl Parser<'a, &'a str, Program, extra::Err<Rich<'a, char>>> {
-    let ident = text::ascii::ident().map(|i: &str| Ident(i.to_owned()));
+pub fn parser<'src, I>() -> impl Parser<'src, I, Program, extra::Err<Rich<'src, Token>>>
+where
+    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+{
+    let ident = select!(Token::Identifier(i) => Ident(i));
     let expr = recursive(|expr| {
-        let literal = choice((
-            text::int(10).from_str().unwrapped().map(Literal::Number),
-            none_of('"')
-                .repeated()
-                .collect()
-                .delimited_by(just('"'), just('"'))
-                .map(Literal::String),
-        ));
+        let literal = select!(Token::Literal(l) => l);
         let fn_call = group((
             ident,
             expr.clone()
-                .separated_by(just(','))
+                .separated_by(just(Token::Comma))
                 .collect()
-                .delimited_by(just('('), just(')')),
+                .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
         ))
         .map(|(ident, args)| FnCall { ident, args });
         let expr = choice((
             fn_call.map(Expr::FnCall),
             ident.map(Expr::Ident),
             literal.map(Expr::Literal),
-        ))
-        .padded();
+        ));
         expr
     });
 
@@ -92,42 +85,40 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Program, extra::Err<Rich<'a, cha
         group((
             ident,
             type_
-                .separated_by(just(','))
+                .separated_by(just(Token::Comma))
                 .collect()
-                .delimited_by(just('['), just(']'))
+                .delimited_by(just(Token::LeftBracket), just(Token::RightBracket))
                 .or_not(),
         ))
-        .padded()
         .map(|(ident, generics)| Type {
             ident,
             generics: generics.unwrap_or_default(),
         })
     });
 
-    let assign = just("val ")
+    let assign = just(Token::Val)
         .ignore_then(ident)
-        .then_ignore(just('=').padded())
+        .then_ignore(just(Token::Equals))
         .then(expr.clone())
         .map(|(ident, expr)| Assign { ident, expr });
 
-    let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr))).padded();
+    let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr)));
 
     let fn_ = group((
-        just("def ").ignore_then(ident),
+        just(Token::Def).ignore_then(ident),
         ident
-            .then_ignore(just(':'))
+            .then_ignore(just(Token::Colon))
             .then(type_.clone())
-            .separated_by(just(','))
+            .separated_by(just(Token::Comma))
             .collect()
-            .delimited_by(just('('), just(')')),
-        just(':').padded().ignore_then(type_),
-        just('=').padded().ignore_then(
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+        just(Token::Colon).ignore_then(type_),
+        just(Token::Equals).ignore_then(
             stmt.repeated()
                 .collect()
-                .delimited_by(just('{').padded(), just('}').padded()),
+                .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
         ),
     ))
-    .padded()
     .map(|(ident, args, ret, body)| Fn {
         ident,
         args,
@@ -136,11 +127,10 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Program, extra::Err<Rich<'a, cha
     });
 
     let object = group((
-        just("object").padded().ignore_then(ident),
+        just(Token::Object).ignore_then(ident),
         fn_.repeated()
             .collect()
-            .delimited_by(just('{'), just('}'))
-            .padded(),
+            .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
     ))
     .map(|(ident, fns)| Object { ident, fns });
 
@@ -150,4 +140,11 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Program, extra::Err<Rich<'a, cha
         .map(|objects| Program { objects });
 
     program
+}
+
+pub fn parse<'src, I>(src: I) -> Result<Program, Vec<Error<'src, Token>>>
+where
+    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+{
+    parser().parse(src).into_result()
 }

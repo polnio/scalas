@@ -2,11 +2,13 @@ mod args;
 mod compiler;
 mod error;
 mod parser;
+mod tokenizer;
 
 use args::Args;
-use chumsky::Parser as _;
+use chumsky::input::Input as _;
 use compiler::compile;
-use parser::parser;
+use parser::parse;
+use tokenizer::tokenize;
 
 fn main() {
     let args = Args::parse();
@@ -17,7 +19,20 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let program = match parser().parse(&src).into_result() {
+    let tokens = match tokenize(&src) {
+        Ok(tokens) => tokens,
+        Err(errs) => {
+            let path_str = args.path.to_string_lossy().into_owned();
+            for err in errs {
+                error::report(path_str.clone(), src.clone(), err);
+            }
+            std::process::exit(1);
+        }
+    };
+    let tokens = tokens
+        .as_slice()
+        .map((src.len()..src.len()).into(), |(t, s)| (t, s));
+    let program = match parse(tokens) {
         Ok(program) => program,
         Err(errs) => {
             let path_str = args.path.to_string_lossy().into_owned();

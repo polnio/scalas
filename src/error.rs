@@ -1,7 +1,12 @@
 use ariadne::Report;
 use chumsky::error::Rich;
+use chumsky::span::SimpleSpan;
+use std::fmt::Display;
 
-pub fn report(path: String, src: String, err: Rich<'_, char>) {
+pub type Spanned<'a, T> = (T, SimpleSpan);
+pub type Error<'a, E> = Rich<'a, E>;
+
+pub fn report<E: Display>(path: String, src: String, err: Rich<'_, E>) {
     Report::build(
         ariadne::ReportKind::Error,
         (path.clone(), err.span().into_range()),
