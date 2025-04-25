@@ -150,10 +150,7 @@ impl<W: Write> Compiler<W> {
                 parser::Literal::String(s) => self.create_string(s).1,
             },
             parser::Expr::Ident(ident) => {
-                let Some(value) = self.variables.get(&**ident) else {
-                    eprintln!("Error: undefined variable {}", ident);
-                    std::process::exit(1);
-                };
+                let value = self.variables.get(&**ident).unwrap();
                 value.1.clone()
             }
             parser::Expr::FnCall(fn_call) => {
@@ -204,10 +201,7 @@ impl<W: Write> Compiler<W> {
                 }
             },
             parser::Expr::Ident(ident) => {
-                let Some(value) = self.variables.get(&**ident) else {
-                    eprintln!("Error: undefined variable {}", ident);
-                    std::process::exit(1);
-                };
+                let value = self.variables.get(&**ident).unwrap();
                 write!(self.w, "  lea {}, [rbp-{}]\n", reg, value.0)?;
             }
             parser::Expr::FnCall(fn_call) => {

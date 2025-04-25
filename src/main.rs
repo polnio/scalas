@@ -1,4 +1,5 @@
 mod args;
+mod builtins;
 mod compiler;
 mod error;
 mod parser;

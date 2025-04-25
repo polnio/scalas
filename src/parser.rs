@@ -1,6 +1,9 @@
+use crate::builtins::BUILTINS_IDENTIFIERS;
 use crate::error::Error;
 use crate::tokenizer::Token;
-use chumsky::{input::ValueInput, prelude::*};
+use chumsky::extra::SimpleState;
+use chumsky::input::ValueInput;
+use chumsky::prelude::*;
 use derive_more::{Deref, Display};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deref, Display)]
@@ -58,15 +61,29 @@ pub struct Program {
     pub objects: Vec<Object>,
 }
 
-pub fn parser<'src, I>() -> impl Parser<'src, I, Program, extra::Err<Rich<'src, Token>>>
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParserState {
+    variables: Vec<Ident>,
+}
+
+pub fn parser<'src, I>()
+-> impl Parser<'src, I, Program, extra::Full<Error<'src, Token>, SimpleState<ParserState>, ()>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
     let ident = select!(Token::Identifier(i) => Ident(i));
+    let existing_ident = ident.validate(|ident, extra, e| {
+        let span = extra.span();
+        let state: &mut SimpleState<ParserState> = extra.state();
+        if !state.variables.contains(&ident) {
+            e.emit(Error::custom(span, "Variable not defined"));
+        }
+        ident
+    });
     let expr = recursive(|expr| {
         let literal = select!(Token::Literal(l) => l);
         let fn_call = group((
-            ident,
+            existing_ident,
             expr.clone()
                 .separated_by(just(Token::Comma))
                 .collect()
@@ -75,7 +92,7 @@ where
         .map(|(ident, args)| FnCall { ident, args });
         let expr = choice((
             fn_call.map(Expr::FnCall),
-            ident.map(Expr::Ident),
+            existing_ident.map(Expr::Ident),
             literal.map(Expr::Literal),
         ));
         expr
@@ -97,7 +114,16 @@ where
     });
 
     let assign = just(Token::Val)
-        .ignore_then(ident)
+        .ignore_then(ident.validate(|ident, extra, e| {
+            let span = extra.span();
+            let state: &mut SimpleState<ParserState> = extra.state();
+            if state.variables.contains(&ident) {
+                e.emit(Error::custom(span, "Variable already defined"));
+            } else {
+                state.variables.push(ident.clone());
+            }
+            ident
+        }))
         .then_ignore(just(Token::Equals))
         .then(expr.clone())
         .map(|(ident, expr)| Assign { ident, expr });
@@ -146,5 +172,11 @@ pub fn parse<'src, I>(src: I) -> Result<Program, Vec<Error<'src, Token>>>
 where
     I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
 {
-    parser().parse(src).into_result()
+    let mut state = ParserState::default();
+    state
+        .variables
+        .extend(BUILTINS_IDENTIFIERS.iter().map(|s| Ident(s.to_string())));
+    parser()
+        .parse_with_state(src, &mut SimpleState(state))
+        .into_result()
 }
