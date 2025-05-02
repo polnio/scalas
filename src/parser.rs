@@ -7,69 +7,73 @@ use chumsky::prelude::*;
 use derive_more::{Deref, Display};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deref, Display)]
-pub struct Ident(String);
+pub struct Ident<'src>(&'src str);
 
-pub type Literal = crate::tokenizer::Literal;
+pub type Literal<'src> = crate::tokenizer::Literal<'src>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FnCall {
-    pub ident: Ident,
-    pub args: Vec<Expr>,
+pub struct FnCall<'src> {
+    pub ident: Ident<'src>,
+    pub args: Vec<Expr<'src>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
-    Literal(Literal),
-    FnCall(FnCall),
-    Ident(Ident),
+pub enum Expr<'src> {
+    Literal(Literal<'src>),
+    FnCall(FnCall<'src>),
+    Ident(Ident<'src>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Type {
-    pub ident: Ident,
-    pub generics: Vec<Type>,
+pub struct Type<'src> {
+    pub ident: Ident<'src>,
+    pub generics: Vec<Type<'src>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Assign {
-    pub ident: Ident,
-    pub expr: Expr,
+pub struct Assign<'src> {
+    pub ident: Ident<'src>,
+    pub expr: Expr<'src>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    Expr(Expr),
-    Assign(Assign),
+pub enum Stmt<'src> {
+    Expr(Expr<'src>),
+    Assign(Assign<'src>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Fn {
-    pub ident: Ident,
-    pub args: Vec<(Ident, Type)>,
-    pub ret: Type,
-    pub body: Vec<Stmt>,
+pub struct Fn<'src> {
+    pub ident: Ident<'src>,
+    pub args: Vec<(Ident<'src>, Type<'src>)>,
+    pub ret: Type<'src>,
+    pub body: Vec<Stmt<'src>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Object {
-    pub ident: Ident,
-    pub fns: Vec<Fn>,
+pub struct Object<'src> {
+    pub ident: Ident<'src>,
+    pub fns: Vec<Fn<'src>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Program {
-    pub objects: Vec<Object>,
+pub struct Program<'src> {
+    pub objects: Vec<Object<'src>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ParserState {
-    variables: Vec<Ident>,
+pub struct ParserState<'src> {
+    variables: Vec<Ident<'src>>,
 }
 
-pub fn parser<'src, I>()
--> impl Parser<'src, I, Program, extra::Full<Error<'src, Token>, SimpleState<ParserState>, ()>>
+pub fn parser<'src, I>() -> impl Parser<
+    'src,
+    I,
+    Program<'src>,
+    extra::Full<Error<'src, Token<'src>>, SimpleState<ParserState<'src>>, ()>,
+>
 where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+    I: ValueInput<'src, Token = Token<'src>, Span = SimpleSpan>,
 {
     let ident = select!(Token::Identifier(i) => Ident(i));
     let existing_ident = ident.validate(|ident, extra, e| {
@@ -168,14 +172,14 @@ where
     program
 }
 
-pub fn parse<'src, I>(src: I) -> Result<Program, Vec<Error<'src, Token>>>
+pub fn parse<'src, I>(src: I) -> Result<Program<'src>, Vec<Error<'src, Token<'src>>>>
 where
-    I: ValueInput<'src, Token = Token, Span = SimpleSpan>,
+    I: ValueInput<'src, Token = Token<'src>, Span = SimpleSpan>,
 {
     let mut state = ParserState::default();
     state
         .variables
-        .extend(BUILTINS_IDENTIFIERS.iter().map(|s| Ident(s.to_string())));
+        .extend(BUILTINS_IDENTIFIERS.iter().map(|s| Ident(*s)));
     parser()
         .parse_with_state(src, &mut SimpleState(state))
         .into_result()

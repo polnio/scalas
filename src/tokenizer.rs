@@ -4,15 +4,15 @@ use derive_more::Display;
 use crate::error::{Error, Spanned};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
-pub enum Literal {
+pub enum Literal<'src> {
     Number(i64),
-    String(String),
+    String(&'src str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
-pub enum Token {
-    Literal(Literal),
-    Identifier(String),
+pub enum Token<'src> {
+    Literal(Literal<'src>),
+    Identifier(&'src str),
 
     // Keywords
     #[display("object")]
@@ -45,14 +45,14 @@ pub enum Token {
     RightBracket,
 }
 
-fn tokenizer<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<'a, Token>>, extra::Err<Error<'a, char>>>
-{
+fn tokenizer<'src>()
+-> impl Parser<'src, &'src str, Vec<Spanned<'src, Token<'src>>>, extra::Err<Error<'src, char>>> {
     choice((
         text::ident().map(|i| match i {
             "object" => Token::Object,
             "def" => Token::Def,
             "val" => Token::Val,
-            _ => Token::Identifier(i.to_owned()),
+            _ => Token::Identifier(i),
         }),
         just(':').to(Token::Colon),
         just(';').to(Token::Semicolon),
@@ -70,7 +70,7 @@ fn tokenizer<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<'a, Token>>, extra::E
             .map(|n| Token::Literal(Literal::Number(n))),
         none_of('"')
             .repeated()
-            .collect()
+            .to_slice()
             .delimited_by(just('"'), just('"'))
             .map(|s| Token::Literal(Literal::String(s))),
     ))
@@ -80,6 +80,8 @@ fn tokenizer<'a>() -> impl Parser<'a, &'a str, Vec<Spanned<'a, Token>>, extra::E
     .collect()
 }
 
-pub fn tokenize<'a>(src: &'a str) -> Result<Vec<Spanned<'a, Token>>, Vec<Error<'a, char>>> {
+pub fn tokenize<'src>(
+    src: &'src str,
+) -> Result<Vec<Spanned<'src, Token<'src>>>, Vec<Error<'src, char>>> {
     tokenizer().parse(src).into_result()
 }
