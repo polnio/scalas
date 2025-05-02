@@ -1,61 +1,130 @@
 use crate::args::Args;
 use crate::parser;
 use convert_case::{Case, Casing as _};
-use derive_more::Display;
 use indexmap::IndexMap;
+use slotmap::SlotMap;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::sync::LazyLock;
 
 const REGISTERS: &[&str] = &["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
-#[derive(Debug, Clone, PartialEq, Eq, Display)]
-enum PtrValue {
-    Label(String),
-    // Address(usize),
+static NUMBER_TYPE: LazyLock<AppliedType> = LazyLock::new(|| AppliedType {
+    type_: Type {
+        cell_count_fn: Box::new(|_| 1),
+    },
+    generics: Default::default(),
+});
+static STRING_TYPE: LazyLock<AppliedType> = LazyLock::new(|| AppliedType {
+    type_: Type {
+        cell_count_fn: Box::new(|_| 2),
+    },
+    generics: Default::default(),
+});
+
+struct Variable {
+    type_: AppliedType,
+    offset: usize,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Display)]
-enum PrimitiveValue {
-    Int(i64),
-    QWord(usize),
-    Ptr(PtrValue),
-    Reg(String),
+
+#[derive(Clone)]
+struct Type {
+    cell_count_fn: Box<fn(&[AppliedType]) -> usize>,
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct StructValue {
-    data: IndexMap<String, PrimitiveValue>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Value {
-    Primitive(PrimitiveValue),
-    Struct(StructValue),
-}
-impl Value {
-    fn size(&self) -> usize {
-        match self {
-            Value::Primitive(_) => 8,
-            // Value::Struct(st) => st.data.values().map(Value::size).sum::<usize>(),
-            Value::Struct(st) => st.data.values().len() * 8,
-        }
+impl Type {
+    fn cell_count(&self, generics: &[AppliedType]) -> usize {
+        (self.cell_count_fn)(generics)
     }
+}
+#[derive(Clone)]
+struct AppliedType {
+    type_: Type,
+    generics: Vec<AppliedType>,
+}
+impl AppliedType {
+    fn cell_count(&self) -> usize {
+        self.type_.cell_count(&self.generics)
+    }
+}
+
+type EnvKey = slotmap::DefaultKey;
+
+#[derive(Default)]
+struct Env {
+    parent: Option<EnvKey>,
+    variables: IndexMap<String, Variable>,
+    types: IndexMap<String, Type>,
+    children: Vec<EnvKey>,
 }
 
 struct Compiler<W: Write> {
     w: W,
-    variables: IndexMap<String, (usize, Value)>,
-    // types: IndexMap<String, Value>,
+    current_env: EnvKey,
+    envs: SlotMap<EnvKey, Env>,
     data: Vec<String>,
 }
 impl<W: Write> Compiler<W> {
     pub fn new(w: W) -> Self {
+        let mut envs = SlotMap::with_key();
+        let current_env = envs.insert(Default::default());
+        let data = Default::default();
         Self {
             w,
-            variables: Default::default(),
-            // types: Default::default(),
-            data: Default::default(),
+            current_env,
+            envs,
+            data,
         }
+    }
+    fn expr_type(&self, expr: &parser::Expr) -> &AppliedType {
+        match expr {
+            parser::Expr::Literal(l) => match l {
+                parser::Literal::Number(_) => &NUMBER_TYPE,
+                parser::Literal::String(_) => &STRING_TYPE,
+            },
+            parser::Expr::FnCall(fn_call) => {
+                let fn_ = self.expr_type(&parser::Expr::Ident(fn_call.ident.clone()));
+                // Expect Fn[Args, Ret]
+                let type_ = fn_.generics.first().unwrap();
+                type_
+            }
+            parser::Expr::Ident(ident) => {
+                let variable = self.get_variable(ident, self.current_env).unwrap();
+                &variable.type_
+            }
+        }
+    }
+    fn create_string(&mut self, s: &str) -> std::io::Result<()> {
+        let n = self.data.len();
+        let name = format!("data.{}", n);
+        write!(
+            self.w,
+            "  sub rsp, 16\n  mov qword [rsp], {}\n  mov qword [rsp+8], {}\n",
+            name,
+            s.len()
+        )?;
+        self.data.push(format!("db \"{}\"", s));
+        Ok(())
+    }
+    fn get_variables(&self, env: EnvKey) -> impl Iterator<Item = (&String, &Variable)> {
+        let env = self.envs.get(env).unwrap();
+        env.variables.iter()
+    }
+    fn get_variable(&self, ident: &str, env: EnvKey) -> Option<&Variable> {
+        let env = self.envs.get(env).unwrap();
+        if let Some(variable) = env.variables.get(ident) {
+            return Some(variable);
+        }
+        if let Some(parent) = env.parent {
+            return self.get_variable(ident, parent);
+        }
+        None
+    }
+    fn insert_variable(&mut self, ident: String, value: Variable, env: EnvKey) {
+        let env = self.envs.get_mut(env).unwrap();
+        env.variables.insert(ident, value);
     }
     fn compile(&mut self, program: parser::Program, path: &Path) -> std::io::Result<()> {
         let obj_name = path
@@ -70,7 +139,6 @@ impl<W: Write> Compiler<W> {
             obj_name
         )?;
         for object in program.objects {
-            self.variables.clear();
             for fn_ in object.fns {
                 write!(
                     self.w,
@@ -80,11 +148,7 @@ impl<W: Write> Compiler<W> {
                 for stmt in &fn_.body {
                     self.compile_stmt(stmt)?;
                 }
-                write!(
-                    self.w,
-                    "  add rsp, {}\n  pop rbp\n  ret\n",
-                    self.variables.values().map(|v| v.1.size()).sum::<usize>()
-                )?;
+                write!(self.w, "  mov rsp, rbp\n  pop rbp\n  ret\n")?;
             }
         }
 
@@ -127,62 +191,30 @@ impl<W: Write> Compiler<W> {
         write!(self.w, "  call {}\n", *fn_call.ident)
     }
 
-    fn create_string(&mut self, s: &str) -> (String, Value) {
-        let n = self.data.len();
-        let name = format!("data.{}", n);
-        self.data.push(format!("db \"{}\"", s));
-        let value = Value::Struct(StructValue {
-            data: IndexMap::from([
-                (
-                    "data".to_string(),
-                    PrimitiveValue::Ptr(PtrValue::Label(name.clone())),
-                ),
-                ("len".to_string(), PrimitiveValue::QWord(s.len())),
-            ]),
-        });
-        (name, value)
-    }
-
     fn generate_assign(&mut self, assign: &parser::Assign) -> std::io::Result<()> {
-        let value: Value = match &assign.expr {
-            parser::Expr::Literal(literal) => match literal {
-                parser::Literal::Number(n) => Value::Primitive(PrimitiveValue::Int(*n)),
-                parser::Literal::String(s) => self.create_string(s).1,
-            },
-            parser::Expr::Ident(ident) => {
-                let value = self.variables.get(**ident).unwrap();
-                value.1.clone()
-            }
-            parser::Expr::FnCall(fn_call) => {
-                self.generate_fn_call(fn_call)?;
-                Value::Primitive(PrimitiveValue::Reg("rax".to_owned()))
-            }
-        };
+        let type_ = self.expr_type(&assign.expr).clone();
 
-        self.generate_value_assign(assign.ident.to_string(), value)
+        self.move_to_reg("rax", &assign.expr)?;
+
+        self.generate_value_assign(assign.ident.to_string(), type_)
     }
 
-    fn generate_value_assign(&mut self, ident: String, value: Value) -> std::io::Result<()> {
-        write!(self.w, "  sub rsp, {}\n", value.size())?;
-        let offset = self.variables.values().map(|v| v.1.size()).sum::<usize>() + value.size();
-        let mut coffset = 0;
-        match &value {
-            Value::Primitive(p) => {
-                write!(self.w, "  mov qword [rsp-{}], {}\n", offset - coffset, p)?
-            }
-            Value::Struct(st) => {
-                for v in st.data.values() {
-                    write!(
-                        self.w,
-                        "  mov qword [rbp-{}], {}\n",
-                        offset - coffset,
-                        v.to_string()
-                    )?;
-                    coffset += 8
-                }
-            }
-        }
-        self.variables.insert(ident, (offset, value));
+    fn generate_value_assign(&mut self, ident: String, type_: AppliedType) -> std::io::Result<()> {
+        let cell_count = type_.cell_count();
+        write!(self.w, "  sub rsp, {}\n", cell_count * 8)?;
+        let offset = self
+            .get_variables(self.current_env)
+            .map(|v| v.1.offset)
+            .max()
+            .unwrap_or_default()
+            + cell_count;
+        write!(
+            self.w,
+            "  lea rdi, [rbp-{}]\n  mov rsi, rax\n  mov rcx, {}\n  rep movsq\n",
+            offset * 8,
+            cell_count * 8,
+        )?;
+        self.insert_variable(ident, Variable { type_, offset }, self.current_env);
 
         Ok(())
     }
@@ -194,15 +226,16 @@ impl<W: Write> Compiler<W> {
                     write!(self.w, "  mov {}, {}\n", reg, n)?;
                 }
                 parser::Literal::String(str) => {
-                    let offset = self.variables.values().map(|v| v.1.size()).sum::<usize>();
-                    let (name, value) = self.create_string(str);
-                    self.generate_value_assign(name, value.clone())?;
-                    write!(self.w, "  lea {}, [rbp-{}]\n", reg, offset + value.size())?;
+                    self.create_string(str)?;
+                    write!(self.w, "  mov {}, rsp\n", reg,)?;
                 }
             },
             parser::Expr::Ident(ident) => {
-                let value = self.variables.get(**ident).unwrap();
-                write!(self.w, "  lea {}, [rbp-{}]\n", reg, value.0)?;
+                let offset = {
+                    let variable = self.get_variable(**ident, self.current_env).unwrap();
+                    variable.offset
+                };
+                write!(self.w, "  lea {}, [rbp-{}]\n", reg, offset * 8)?;
             }
             parser::Expr::FnCall(fn_call) => {
                 self.generate_fn_call(fn_call)?;

@@ -1,7 +1,6 @@
+use crate::error::{Error, Spanned};
 use chumsky::prelude::*;
 use derive_more::Display;
-
-use crate::error::{Error, Spanned};
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
 pub enum Literal<'src> {
