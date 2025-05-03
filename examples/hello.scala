@@ -1,5 +1,5 @@
 object Hello {
-  def main(): Unit = {
+  def main(args: Array[String]): Unit = {
     greet("Po Co")
   }
   def greet(name: String): Unit = {

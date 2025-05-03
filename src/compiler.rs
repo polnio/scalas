@@ -236,7 +236,7 @@ impl<W: Write> Compiler<W> {
             .to_case(Case::Pascal);
         write!(
             self.w,
-            "format ELF64 executable\n_start:\n  call {}.main\n  mov rax, 60\n  xor rdi, rdi\n  syscall\n",
+            "format ELF64 executable\n_start:\n  push rbp\n  mov rbp, rsp\n  xor r8, r8\n.loop:\n  cmp r8, [rbp+8]\n  je .done\n  inc r8\n  sub rsp, 16\n  mov rax, [rbp+r8*8+8]\n  mov qword [rsp], rax\n  mov rdi, [rsp]\n  call internals.strlen\n  mov qword [rsp+8], rax\n  jmp .loop\n.done:\n  sub rsp, 16\n  mov rax, [rsp+16]\n  mov [rsp], rax\n  mov [rsp+8], r8\n  mov rdi, rsp\n  call {}.main\n  mov rsp, rbp\n  pop rbp\n  mov rax, 60\n  xor rdi, rdi\n  syscall\n",
             obj_name
         )?;
 
@@ -343,6 +343,10 @@ impl<W: Write> Compiler<W> {
             self.w,
             "println:\n  call print\n  mov rax, 1\n  mov rdi, 1\n  mov rsi, data.newline\n  mov rdx, 1\n  syscall\n  ret\n"
         )?;
+        write!(
+            self.w,
+            "internals.strlen:\n  xor rax,rax\n.loop:\n  cmp byte [rdi], 0\n  je .done\n  inc rax\n  inc rdi\n  jmp .loop\n.done:\n  ret\n"
+        )?;
 
         write!(self.w, "data.newline: db 10\n")?;
         for (i, data) in self.data.iter().enumerate() {
@@ -399,7 +403,7 @@ impl<W: Write> Compiler<W> {
             self.w,
             "  lea rdi, [rbp-{}]\n  mov rsi, rax\n  mov rcx, {}\n  rep movsq\n",
             offset * 8,
-            cell_count * 8,
+            cell_count,
         )?;
         self.insert_variable(ident, Variable { type_, offset }, self.current_env);
 
