@@ -12,15 +12,24 @@ use std::sync::LazyLock;
 
 const REGISTERS: &[&str] = &["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
+static UNIT_TYPE: LazyLock<AppliedType> = LazyLock::new(|| AppliedType {
+    type_: Type {
+        generics_count: 0,
+        cell_count_fn: |_| 0,
+    },
+    generics: Default::default(),
+});
 static NUMBER_TYPE: LazyLock<AppliedType> = LazyLock::new(|| AppliedType {
     type_: Type {
-        cell_count_fn: Box::new(|_| 1),
+        generics_count: 0,
+        cell_count_fn: |_| 1,
     },
     generics: Default::default(),
 });
 static STRING_TYPE: LazyLock<AppliedType> = LazyLock::new(|| AppliedType {
     type_: Type {
-        cell_count_fn: Box::new(|_| 2),
+        generics_count: 0,
+        cell_count_fn: |_| 2,
     },
     generics: Default::default(),
 });
@@ -32,7 +41,8 @@ struct Variable {
 
 #[derive(Clone)]
 struct Type {
-    cell_count_fn: Box<fn(&[AppliedType]) -> usize>,
+    generics_count: usize,
+    cell_count_fn: fn(&[AppliedType]) -> usize,
 }
 impl Type {
     fn cell_count(&self, generics: &[AppliedType]) -> usize {
@@ -49,17 +59,76 @@ impl AppliedType {
         self.type_.cell_count(&self.generics)
     }
 }
+impl TryFrom<Type> for AppliedType {
+    // TODO: Use a better error type
+    type Error = ();
+    fn try_from(value: Type) -> Result<Self, Self::Error> {
+        if value.generics_count != 0 {
+            return Err(());
+        }
+        Ok(Self {
+            type_: value,
+            generics: Default::default(),
+        })
+    }
+}
+
+struct Function {
+    args: Vec<AppliedType>,
+    ret: AppliedType,
+}
 
 type EnvKey = slotmap::DefaultKey;
 
 #[derive(Default)]
 struct Env {
+    scope: Option<String>,
     parent: Option<EnvKey>,
     variables: IndexMap<String, Variable>,
+    functions: IndexMap<String, Function>,
     types: IndexMap<String, Type>,
-    children: Vec<EnvKey>,
+    // children: Vec<EnvKey>,
+}
+impl Env {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn with_scope(scope: String, parent: EnvKey) -> Self {
+        Self {
+            scope: Some(scope),
+            parent: Some(parent),
+            ..Default::default()
+        }
+    }
 }
 
+macro_rules! impl_get_set {
+    ($name:ident : $ty:ty) => {
+        paste::paste! {
+            #[allow(unused)]
+            fn [<get_ $name s>](&self, env: EnvKey) -> impl Iterator<Item = (&String, &$ty)> {
+                let env = self.envs.get(env).unwrap();
+                env.[<$name s>].iter()
+            }
+            #[allow(unused)]
+            fn [<get_ $name>](&self, ident: &str, env: EnvKey) -> Option<&$ty> {
+                let env = self.envs.get(env).unwrap();
+                if let Some(value) = env.[<$name s>].get(ident) {
+                    return Some(value);
+                }
+                if let Some(parent) = env.parent {
+                    return self.[<get_ $name>](ident, parent);
+                }
+                None
+            }
+            #[allow(unused)]
+            fn [<insert_ $name>](&mut self, ident: String, value: $ty, env: EnvKey) {
+                let env = self.envs.get_mut(env).unwrap();
+                env.[<$name s>].insert(ident, value);
+            }
+        }
+    };
+}
 struct Compiler<W: Write> {
     w: W,
     current_env: EnvKey,
@@ -76,6 +145,22 @@ impl<W: Write> Compiler<W> {
             current_env,
             envs,
             data,
+        }
+    }
+    pub fn subenv(&mut self, ident: String, env: EnvKey) -> EnvKey {
+        self.envs.insert(Env::with_scope(ident, env))
+    }
+    fn convert_type(&self, type_: &parser::Type) -> AppliedType {
+        AppliedType {
+            type_: self
+                .get_type(&type_.ident, self.current_env)
+                .unwrap()
+                .clone(),
+            generics: type_
+                .generics
+                .iter()
+                .map(|type_| self.convert_type(type_))
+                .collect(),
         }
     }
     fn expr_type(&self, expr: &parser::Expr) -> &AppliedType {
@@ -96,6 +181,37 @@ impl<W: Write> Compiler<W> {
             }
         }
     }
+    fn scope(&self, env: EnvKey) -> Option<String> {
+        let env = self.envs.get(env).unwrap();
+        let this = env.scope.as_ref();
+        let parent = env.parent.and_then(|parent| self.scope(parent));
+        match (this, parent) {
+            (Some(this), Some(parent)) => Some(format!("{}.{}", parent, this)),
+            (Some(this), None) => Some(this.clone()),
+            (None, Some(parent)) => Some(parent),
+            (None, None) => None,
+        }
+    }
+    fn scoped<'a>(&'a self, ident: &'a str, env: EnvKey) -> Cow<'a, str> {
+        match self.scope(env) {
+            Some(scope) => format!("{}.{}", scope, ident).into(),
+            None => ident.into(),
+        }
+    }
+    fn scoped_ident<'a>(&'a self, ident: &'a str, env: EnvKey) -> Option<Cow<'a, str>> {
+        let e = self.envs.get(env).unwrap();
+        if e.variables.get(ident).is_some() {
+            Some(self.scoped(ident, env))
+        } else if e.functions.get(ident).is_some() {
+            Some(self.scoped(ident, env))
+        } else if e.types.get(ident).is_some() {
+            Some(self.scoped(ident, env))
+        } else if let Some(parent) = e.parent {
+            self.scoped_ident(ident, parent)
+        } else {
+            None
+        }
+    }
     fn create_string(&mut self, s: &str) -> std::io::Result<()> {
         let n = self.data.len();
         let name = format!("data.{}", n);
@@ -108,24 +224,9 @@ impl<W: Write> Compiler<W> {
         self.data.push(format!("db \"{}\"", s));
         Ok(())
     }
-    fn get_variables(&self, env: EnvKey) -> impl Iterator<Item = (&String, &Variable)> {
-        let env = self.envs.get(env).unwrap();
-        env.variables.iter()
-    }
-    fn get_variable(&self, ident: &str, env: EnvKey) -> Option<&Variable> {
-        let env = self.envs.get(env).unwrap();
-        if let Some(variable) = env.variables.get(ident) {
-            return Some(variable);
-        }
-        if let Some(parent) = env.parent {
-            return self.get_variable(ident, parent);
-        }
-        None
-    }
-    fn insert_variable(&mut self, ident: String, value: Variable, env: EnvKey) {
-        let env = self.envs.get_mut(env).unwrap();
-        env.variables.insert(ident, value);
-    }
+    impl_get_set!(variable: Variable);
+    impl_get_set!(function: Function);
+    impl_get_set!(type: Type);
     fn compile(&mut self, program: parser::Program, path: &Path) -> std::io::Result<()> {
         let obj_name = path
             .file_stem()
@@ -138,17 +239,98 @@ impl<W: Write> Compiler<W> {
             "format ELF64 executable\n_start:\n  call {}.main\n  mov rax, 60\n  xor rdi, rdi\n  syscall\n",
             obj_name
         )?;
-        for object in program.objects {
-            for fn_ in object.fns {
+
+        self.insert_type("Unit".to_owned(), UNIT_TYPE.type_.clone(), self.current_env);
+        self.insert_type(
+            "Number".to_owned(),
+            NUMBER_TYPE.type_.clone(),
+            self.current_env,
+        );
+        self.insert_type(
+            "String".to_owned(),
+            STRING_TYPE.type_.clone(),
+            self.current_env,
+        );
+        self.insert_type(
+            "Array".to_owned(),
+            Type {
+                generics_count: 1,
+                cell_count_fn: |_| 2,
+            },
+            self.current_env,
+        );
+        self.insert_type(
+            "Fn".to_owned(),
+            Type {
+                generics_count: 2,
+                cell_count_fn: |_| 1,
+            },
+            self.current_env,
+        );
+
+        self.insert_function(
+            "print".to_owned(),
+            Function {
+                args: vec![STRING_TYPE.clone()],
+                ret: UNIT_TYPE.clone(),
+            },
+            self.current_env,
+        );
+        self.insert_function(
+            "println".to_owned(),
+            Function {
+                args: vec![STRING_TYPE.clone()],
+                ret: UNIT_TYPE.clone(),
+            },
+            self.current_env,
+        );
+
+        let objects_envs = program
+            .objects
+            .iter()
+            .map(|object| {
+                let object_env = self.subenv(object.ident.to_string(), self.current_env);
+                object
+                    .fns
+                    .iter()
+                    .map(|fn_| {
+                        self.insert_function(
+                            fn_.ident.to_string(),
+                            Function {
+                                args: fn_
+                                    .args
+                                    .iter()
+                                    .map(|(_ident, type_)| self.convert_type(type_))
+                                    .collect(),
+                                ret: self.convert_type(&fn_.ret),
+                            },
+                            object_env,
+                        );
+                        let fn_env = self.subenv(fn_.ident.to_string(), object_env);
+                        (object_env, fn_env)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        for (object, envs) in program.objects.iter().zip(objects_envs) {
+            for (fn_, (_object_env, fn_env)) in object.fns.iter().zip(envs) {
                 write!(
                     self.w,
                     "{}.{}:\n  push rbp\n  mov rbp, rsp\n",
                     *object.ident, *fn_.ident
                 )?;
+                let parent_env = self.current_env;
+                self.current_env = fn_env;
+                for (i, (ident, type_)) in fn_.args.iter().enumerate() {
+                    write!(self.w, "  mov rax, {}\n", REGISTERS[i])?;
+                    self.generate_value_assign(ident.to_string(), self.convert_type(type_))?;
+                }
                 for stmt in &fn_.body {
                     self.compile_stmt(stmt)?;
                 }
                 write!(self.w, "  mov rsp, rbp\n  pop rbp\n  ret\n")?;
+                self.current_env = parent_env;
             }
         }
 
@@ -188,7 +370,12 @@ impl<W: Write> Compiler<W> {
         for (arg, reg) in Iterator::zip(fn_call.args.iter(), REGISTERS.iter()) {
             self.move_to_reg(reg, arg)?;
         }
-        write!(self.w, "  call {}\n", *fn_call.ident)
+        let ident = self
+            .scoped_ident(*fn_call.ident, self.current_env)
+            .unwrap()
+            // TODO: Make it more efficient
+            .into_owned();
+        write!(self.w, "  call {}\n", ident)
     }
 
     fn generate_assign(&mut self, assign: &parser::Assign) -> std::io::Result<()> {

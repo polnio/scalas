@@ -76,18 +76,10 @@ where
     I: ValueInput<'src, Token = Token<'src>, Span = SimpleSpan>,
 {
     let ident = select!(Token::Identifier(i) => Ident(i));
-    let existing_ident = ident.validate(|ident, extra, e| {
-        let span = extra.span();
-        let state: &mut SimpleState<ParserState> = extra.state();
-        if !state.variables.contains(&ident) {
-            e.emit(Error::custom(span, "Variable not defined"));
-        }
-        ident
-    });
     let expr = recursive(|expr| {
         let literal = select!(Token::Literal(l) => l);
         let fn_call = group((
-            existing_ident,
+            ident,
             expr.clone()
                 .separated_by(just(Token::Comma))
                 .collect()
@@ -96,7 +88,7 @@ where
         .map(|(ident, args)| FnCall { ident, args });
         let expr = choice((
             fn_call.map(Expr::FnCall),
-            existing_ident.map(Expr::Ident),
+            ident.map(Expr::Ident),
             literal.map(Expr::Literal),
         ));
         expr
