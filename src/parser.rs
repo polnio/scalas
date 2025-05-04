@@ -1,7 +1,5 @@
-use crate::builtins::BUILTINS_IDENTIFIERS;
 use crate::error::Error;
 use crate::tokenizer::Token;
-use chumsky::extra::SimpleState;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use derive_more::{Deref, Display};
@@ -61,17 +59,7 @@ pub struct Program<'src> {
     pub objects: Vec<Object<'src>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ParserState<'src> {
-    variables: Vec<Ident<'src>>,
-}
-
-pub fn parser<'src, I>() -> impl Parser<
-    'src,
-    I,
-    Program<'src>,
-    extra::Full<Error<'src, Token<'src>>, SimpleState<ParserState<'src>>, ()>,
->
+pub fn parser<'src, I>() -> impl Parser<'src, I, Program<'src>, extra::Err<Error<'src, Token<'src>>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = SimpleSpan>,
 {
@@ -110,16 +98,7 @@ where
     });
 
     let assign = just(Token::Val)
-        .ignore_then(ident.validate(|ident, extra, e| {
-            let span = extra.span();
-            let state: &mut SimpleState<ParserState> = extra.state();
-            if state.variables.contains(&ident) {
-                e.emit(Error::custom(span, "Variable already defined"));
-            } else {
-                state.variables.push(ident.clone());
-            }
-            ident
-        }))
+        .ignore_then(ident)
         .then_ignore(just(Token::Equals))
         .then(expr.clone())
         .map(|(ident, expr)| Assign { ident, expr });
@@ -168,11 +147,5 @@ pub fn parse<'src, I>(src: I) -> Result<Program<'src>, Vec<Error<'src, Token<'sr
 where
     I: ValueInput<'src, Token = Token<'src>, Span = SimpleSpan>,
 {
-    let mut state = ParserState::default();
-    state
-        .variables
-        .extend(BUILTINS_IDENTIFIERS.iter().map(|s| Ident(*s)));
-    parser()
-        .parse_with_state(src, &mut SimpleState(state))
-        .into_result()
+    parser().parse(src).into_result()
 }
