@@ -3,7 +3,7 @@ use chumsky::error::Rich;
 use chumsky::span::SimpleSpan;
 use std::fmt::Display;
 
-pub type Spanned<'a, T> = (T, SimpleSpan);
+pub type Spanned<T> = (T, SimpleSpan);
 pub type Error<'a, E> = Rich<'a, E>;
 
 pub fn report<E: Display>(path: String, src: String, err: Rich<'_, E>) {

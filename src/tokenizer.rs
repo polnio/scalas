@@ -45,7 +45,7 @@ pub enum Token<'src> {
 }
 
 fn tokenizer<'src>()
--> impl Parser<'src, &'src str, Vec<Spanned<'src, Token<'src>>>, extra::Err<Error<'src, char>>> {
+-> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>, extra::Err<Error<'src, char>>> {
     choice((
         text::ident().map(|i| match i {
             "object" => Token::Object,
@@ -73,14 +73,12 @@ fn tokenizer<'src>()
             .delimited_by(just('"'), just('"'))
             .map(|s| Token::Literal(Literal::String(s))),
     ))
-    .map_with(|t, e| (t, e.span()))
+    .map_with(|o, e| (o, e.span()))
     .padded_by(text::whitespace())
     .repeated()
     .collect()
 }
 
-pub fn tokenize<'src>(
-    src: &'src str,
-) -> Result<Vec<Spanned<'src, Token<'src>>>, Vec<Error<'src, char>>> {
+pub fn tokenize<'src>(src: &'src str) -> Result<Vec<Spanned<Token<'src>>>, Vec<Error<'src, char>>> {
     tokenizer().parse(src).into_result()
 }

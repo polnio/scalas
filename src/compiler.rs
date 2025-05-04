@@ -1,5 +1,5 @@
 use crate::args::Args;
-use crate::parser;
+use crate::{parser, tokenizer};
 use convert_case::{Case, Casing as _};
 use indexmap::IndexMap;
 use slotmap::SlotMap;
@@ -165,9 +165,9 @@ impl<W: Write> Compiler<W> {
     }
     fn expr_type(&self, expr: &parser::Expr) -> &AppliedType {
         match expr {
-            parser::Expr::Literal(l) => match l {
-                parser::Literal::Number(_) => &NUMBER_TYPE,
-                parser::Literal::String(_) => &STRING_TYPE,
+            parser::Expr::Literal(l) => match &**l {
+                tokenizer::Literal::Number(_) => &NUMBER_TYPE,
+                tokenizer::Literal::String(_) => &STRING_TYPE,
             },
             parser::Expr::FnCall(fn_call) => {
                 let fn_ = self.expr_type(&parser::Expr::Ident(fn_call.ident.clone()));
@@ -411,11 +411,11 @@ impl<W: Write> Compiler<W> {
 
     fn move_to_reg(&mut self, reg: &str, expr: &parser::Expr) -> std::io::Result<()> {
         match expr {
-            parser::Expr::Literal(literal) => match literal {
-                parser::Literal::Number(n) => {
+            parser::Expr::Literal(literal) => match &**literal {
+                tokenizer::Literal::Number(n) => {
                     write!(self.w, "  mov {}, {}\n", reg, n)?;
                 }
-                parser::Literal::String(str) => {
+                tokenizer::Literal::String(str) => {
                     self.create_string(str)?;
                     write!(self.w, "  mov {}, rsp\n", reg,)?;
                 }
