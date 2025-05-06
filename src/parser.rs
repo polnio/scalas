@@ -8,8 +8,8 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Eq, Deref)]
 pub struct Ident<'src> {
     #[deref]
-    inner: &'src str,
-    span: SimpleSpan,
+    pub inner: &'src str,
+    pub span: SimpleSpan,
 }
 impl<'src> Display for Ident<'src> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -20,8 +20,8 @@ impl<'src> Display for Ident<'src> {
 #[derive(Debug, Clone, PartialEq, Eq, Deref)]
 pub struct Literal<'src> {
     #[deref]
-    inner: crate::tokenizer::Literal<'src>,
-    span: SimpleSpan,
+    pub inner: crate::tokenizer::Literal<'src>,
+    pub span: SimpleSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

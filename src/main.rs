@@ -43,7 +43,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(err) = compile(program, &args) {
-        eprintln!("{}", err);
+    if let Err(errs) = compile(program, &args) {
+        let path_str = args.path.to_string_lossy().into_owned();
+        for err in errs {
+            error::report(path_str.clone(), src.clone(), err);
+        }
+        std::process::exit(1);
     }
 }
