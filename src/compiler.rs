@@ -237,13 +237,17 @@ impl<W: Write> Compiler<W> {
             (None, None) => None,
         }
     }
-    fn scoped<'a>(&'a self, ident: &'a str, env: EnvKey) -> Cow<'a, str> {
+    fn scoped<'this, 'ident>(&'this self, ident: &'ident str, env: EnvKey) -> Cow<'ident, str> {
         match self.scope(env) {
             Some(scope) => format!("{}.{}", scope, ident).into(),
             None => ident.into(),
         }
     }
-    fn scoped_ident<'a>(&'a self, ident: &'a str, env: EnvKey) -> Option<Cow<'a, str>> {
+    fn scoped_ident<'this, 'ident>(
+        &'this self,
+        ident: &'ident str,
+        env: EnvKey,
+    ) -> Option<Cow<'ident, str>> {
         let e = self.envs.get(env).unwrap();
         if e.variables.get(ident).is_some() {
             Some(self.scoped(ident, env))
@@ -478,9 +482,7 @@ impl<W: Write> Compiler<W> {
                     fn_call.ident.span,
                     format!("Unknown function {}", fn_call.ident),
                 )]
-            })?
-            // TODO: Make it more efficient
-            .into_owned();
+            })?;
         compiler_write!(self.w, "  call {}\n", ident);
 
         Ok(())
