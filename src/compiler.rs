@@ -195,7 +195,10 @@ impl<W: Write> Compiler<W> {
         }
         Ok(AppliedType { type_, generics })
     }
-    fn expr_type<'src>(&self, expr: &parser::Expr) -> Result<&AppliedType, Vec<Error<'src, Unit>>> {
+    fn expr_type<'src>(
+        &mut self,
+        expr: &parser::Expr,
+    ) -> Result<&AppliedType, Vec<Error<'src, Unit>>> {
         match expr {
             parser::Expr::Literal(l) => match &**l {
                 tokenizer::Literal::Number(_) => Ok(&NUMBER_TYPE),
@@ -216,6 +219,10 @@ impl<W: Write> Compiler<W> {
                 })?;
 
                 Ok(&variable.type_)
+            }
+            parser::Expr::Block(block) => {
+                self.compile_block(block)?;
+                Ok(&UNIT_TYPE)
             }
         }
     }
@@ -395,9 +402,7 @@ impl<W: Write> Compiler<W> {
                     };
                     self.generate_value_assign(ident.to_string(), type_)?;
                 }
-                for stmt in &fn_.body {
-                    self.compile_stmt(stmt)?;
-                }
+                self.move_to_reg("rax", &fn_.body)?;
                 compiler_write!(self.w, "  mov rsp, rbp\n  pop rbp\n  ret\n");
                 self.current_env = parent_env;
             }
@@ -425,6 +430,22 @@ impl<W: Write> Compiler<W> {
         Ok(())
     }
 
+    fn compile_block<'this, 'src>(
+        &'this mut self,
+        block: &parser::Block,
+    ) -> Result<(), Vec<Error<'src, Unit>>> {
+        let mut errors = Vec::new();
+        for stmt in &block.stmts {
+            if let Err(errs) = self.compile_stmt(stmt) {
+                errors.extend(errs);
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(())
+    }
+
     fn compile_stmt<'this, 'src>(
         &'this mut self,
         stmt: &parser::Stmt,
@@ -436,6 +457,7 @@ impl<W: Write> Compiler<W> {
                 parser::Expr::FnCall(fn_call) => {
                     self.generate_fn_call(fn_call)?;
                 }
+                parser::Expr::Block(block) => self.compile_block(block)?,
             },
             parser::Stmt::Assign(assign) => self.generate_assign(assign)?,
         }
@@ -530,6 +552,9 @@ impl<W: Write> Compiler<W> {
             parser::Expr::FnCall(fn_call) => {
                 self.generate_fn_call(fn_call)?;
                 compiler_write!(self.w, "  mov {}, rax\n", reg);
+            }
+            parser::Expr::Block(block) => {
+                self.compile_block(block)?;
             }
         }
         Ok(())

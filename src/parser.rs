@@ -32,10 +32,17 @@ pub struct FnCall<'src> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block<'src> {
+    pub stmts: Vec<Stmt<'src>>,
+    pub span: SimpleSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr<'src> {
     Literal(Literal<'src>),
     FnCall(FnCall<'src>),
     Ident(Ident<'src>),
+    Block(Block<'src>),
 }
 impl Expr<'_> {
     pub fn span(&self) -> SimpleSpan {
@@ -43,6 +50,7 @@ impl Expr<'_> {
             Expr::Literal(l) => l.span,
             Expr::FnCall(f) => f.span,
             Expr::Ident(i) => i.span,
+            Expr::Block(b) => b.span,
         }
     }
 }
@@ -80,7 +88,7 @@ pub struct Fn<'src> {
     pub ident: Ident<'src>,
     pub args: Vec<(Ident<'src>, Type<'src>)>,
     pub ret: Type<'src>,
-    pub body: Vec<Stmt<'src>>,
+    pub body: Expr<'src>,
     pub span: SimpleSpan,
 }
 
@@ -122,10 +130,32 @@ where
             args,
             span: e.span(),
         });
+
+        let assign = just(Token::Val)
+            .ignore_then(ident)
+            .then_ignore(just(Token::Equals))
+            .then(expr.clone())
+            .map_with(|(ident, expr), e| Assign {
+                ident,
+                expr,
+                span: e.span(),
+            });
+
+        let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr)));
+        let block = stmt
+            .repeated()
+            .collect()
+            .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
+            .map_with(|stmts, e| Block {
+                stmts,
+                span: e.span(),
+            });
+
         let expr = choice((
             fn_call.map(Expr::FnCall),
             ident.map(Expr::Ident),
             literal.map(Expr::Literal),
+            block.map(Expr::Block),
         ));
         expr
     });
@@ -146,18 +176,6 @@ where
         })
     });
 
-    let assign = just(Token::Val)
-        .ignore_then(ident)
-        .then_ignore(just(Token::Equals))
-        .then(expr.clone())
-        .map_with(|(ident, expr), e| Assign {
-            ident,
-            expr,
-            span: e.span(),
-        });
-
-    let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr)));
-
     let fn_ = group((
         just(Token::Def).ignore_then(ident),
         ident
@@ -167,11 +185,7 @@ where
             .collect()
             .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
         just(Token::Colon).ignore_then(type_),
-        just(Token::Equals).ignore_then(
-            stmt.repeated()
-                .collect()
-                .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
-        ),
+        just(Token::Equals).ignore_then(expr),
     ))
     .map_with(|(ident, args, ret, body), e| Fn {
         ident,
