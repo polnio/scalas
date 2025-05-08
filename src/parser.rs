@@ -3,6 +3,7 @@ use crate::tokenizer::Token;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use derive_more::Deref;
+use itertools::{Either, Itertools as _};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deref)]
@@ -95,6 +96,7 @@ pub struct Fn<'src> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Object<'src> {
     pub ident: Ident<'src>,
+    pub ctor: Block<'src>,
     pub fns: Vec<Fn<'src>>,
     pub span: SimpleSpan,
 }
@@ -113,52 +115,51 @@ where
         inner: i,
         span: e.span(),
     });
-    let expr = recursive(|expr| {
-        let literal = select!(Token::Literal(l) => l).map_with(|l, e| Literal {
-            inner: l,
-            span: e.span(),
-        });
-        let fn_call = group((
-            ident,
-            expr.clone()
-                .separated_by(just(Token::Comma))
-                .collect()
-                .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
-        ))
-        .map_with(|(ident, args), e| FnCall {
-            ident,
-            args,
-            span: e.span(),
-        });
-
-        let assign = just(Token::Val)
-            .ignore_then(ident)
-            .then_ignore(just(Token::Equals))
-            .then(expr.clone())
-            .map_with(|(ident, expr), e| Assign {
-                ident,
-                expr,
-                span: e.span(),
-            });
-
-        let stmt = choice((assign.map(Stmt::Assign), expr.map(Stmt::Expr)));
-        let block = stmt
-            .repeated()
-            .collect()
-            .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
-            .map_with(|stmts, e| Block {
-                stmts,
-                span: e.span(),
-            });
-
-        let expr = choice((
-            fn_call.map(Expr::FnCall),
-            ident.map(Expr::Ident),
-            literal.map(Expr::Literal),
-            block.map(Expr::Block),
-        ));
-        expr
+    let mut expr = Recursive::declare();
+    let literal = select!(Token::Literal(l) => l).map_with(|l, e| Literal {
+        inner: l,
+        span: e.span(),
     });
+    let fn_call = group((
+        ident,
+        expr.clone()
+            .separated_by(just(Token::Comma))
+            .collect()
+            .delimited_by(just(Token::LeftParen), just(Token::RightParen)),
+    ))
+    .map_with(|(ident, args), e| FnCall {
+        ident,
+        args,
+        span: e.span(),
+    });
+
+    let assign = just(Token::Val)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Equals))
+        .then(expr.clone())
+        .map_with(|(ident, expr), e| Assign {
+            ident,
+            expr,
+            span: e.span(),
+        });
+
+    let stmt = choice((assign.map(Stmt::Assign), expr.clone().map(Stmt::Expr)));
+    let block = stmt
+        .clone()
+        .repeated()
+        .collect()
+        .delimited_by(just(Token::LeftBrace), just(Token::RightBrace))
+        .map_with(|stmts, e| Block {
+            stmts,
+            span: e.span(),
+        });
+
+    expr.define(choice((
+        fn_call.map(Expr::FnCall),
+        ident.map(Expr::Ident),
+        literal.map(Expr::Literal),
+        block.map(Expr::Block),
+    )));
 
     let type_ = recursive(|type_| {
         group((
@@ -195,16 +196,30 @@ where
         span: e.span(),
     });
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum ObjectItem<'src> {
+        Stmt(Stmt<'src>),
+        Fn(Fn<'src>),
+    }
     let object = group((
         just(Token::Object).ignore_then(ident),
-        fn_.repeated()
+        choice((stmt.map(ObjectItem::Stmt), fn_.map(ObjectItem::Fn)))
+            .repeated()
             .collect()
             .delimited_by(just(Token::LeftBrace), just(Token::RightBrace)),
     ))
-    .map_with(|(ident, fns), e| Object {
-        ident,
-        fns,
-        span: e.span(),
+    .map_with(|(ident, fns): (_, Vec<ObjectItem>), e| {
+        let (fns, stmts): (Vec<_>, Vec<_>) = fns.into_iter().partition_map(|item| match item {
+            ObjectItem::Fn(fn_) => Either::Left(fn_),
+            ObjectItem::Stmt(stmt) => Either::Right(stmt),
+        });
+        let span = e.span();
+        Object {
+            ident,
+            fns,
+            ctor: Block { stmts, span },
+            span,
+        }
     });
 
     let program = object.repeated().collect().map_with(|objects, e| Program {

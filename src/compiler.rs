@@ -270,7 +270,7 @@ impl<W: Write> Compiler<W> {
             name,
             s.len()
         );
-        self.data.push(format!("db \"{}\"", s));
+        self.data.push(format!("{} db \"{}\"", name, s));
         Ok(())
     }
     impl_get_set!(variable: Variable);
@@ -290,7 +290,8 @@ impl<W: Write> Compiler<W> {
             .to_case(Case::Pascal);
         compiler_write!(
             self.w,
-            "format ELF64 executable\n_start:\n  push rbp\n  mov rbp, rsp\n  xor r8, r8\n.loop:\n  cmp r8, [rbp+8]\n  je .done\n  inc r8\n  sub rsp, 16\n  mov rdi, [rbp+r8*8+8]\n  mov qword [rsp], rdi\n  call internals.strlen\n  mov qword [rsp+8], rax\n  jmp .loop\n.done:\n  sub rsp, 16\n  mov rax, [rsp+16]\n  mov [rsp], rax\n  mov [rsp+8], r8\n  mov rdi, rsp\n  call {}.main\n  mov rsp, rbp\n  pop rbp\n  mov rax, 60\n  xor rdi, rdi\n  syscall\n",
+            "format ELF64 executable\n_start:\n{}  xor r8, r8\n.loop:\n  cmp r8, [rbp+8]\n  je .done\n  inc r8\n  sub rsp, 16\n  mov rdi, [rbp+r8*8+8]\n  mov qword [rsp], rdi\n  call internals.strlen\n  mov qword [rsp+8], rax\n  jmp .loop\n.done:\n  sub rsp, 16\n  mov rax, [rsp+16]\n  mov [rsp], rax\n  mov [rsp+8], r8\n  mov rdi, rsp\n  call {}.main\n  mov rsp, rbp\n  pop rbp\n  mov rax, 60\n  xor rdi, rdi\n  syscall\n",
+            FN_PRELUDE,
             obj_name
         );
 
@@ -345,6 +346,14 @@ impl<W: Write> Compiler<W> {
             .iter()
             .map(|object| {
                 let object_env = self.subenv(object.ident.to_string(), self.current_env);
+                self.insert_function(
+                    object.ident.to_string(),
+                    Function {
+                        args: Default::default(),
+                        ret: UNIT_TYPE.clone(),
+                    },
+                    self.current_env,
+                );
                 object
                     .fns
                     .iter()
@@ -385,14 +394,23 @@ impl<W: Write> Compiler<W> {
             return Err(errors);
         }
 
+        const FN_PRELUDE: &str = "  push rbp\n  mov rbp, rsp\n";
+        const FN_EPILOG: &str = "  mov rsp, rbp\n  pop rbp\n  ret\n";
+
         for (object, envs) in program.objects.iter().zip(objects_envs) {
+            compiler_write!(
+                self.w,
+                "{}:\n  mov al, [data.{}.init]\n  test al, al\n  jz $ + 3\n  ret\n{}  mov byte [data.{}.init], 1\n",
+                *object.ident,
+                *object.ident,
+                FN_PRELUDE,
+                *object.ident
+            );
+            self.data.push(format!("data.{}.init db 0", *object.ident));
+            self.compile_block(&object.ctor)?;
+            compiler_write!(self.w, "{}", FN_EPILOG);
             for (fn_, (_object_env, fn_env)) in object.fns.iter().zip(envs) {
-                compiler_write!(
-                    self.w,
-                    "{}.{}:\n  push rbp\n  mov rbp, rsp\n",
-                    *object.ident,
-                    *fn_.ident
-                );
+                compiler_write!(self.w, "{}.{}:\n{}", *object.ident, *fn_.ident, FN_PRELUDE);
                 let parent_env = self.current_env;
                 self.current_env = fn_env;
                 for (i, (ident, type_)) in fn_.args.iter().enumerate() {
@@ -406,8 +424,9 @@ impl<W: Write> Compiler<W> {
                     };
                     self.generate_value_assign(ident.to_string(), type_)?;
                 }
+                compiler_write!(self.w, "  call {}\n", *object.ident);
                 self.move_to_reg("rax", &fn_.body)?;
-                compiler_write!(self.w, "  mov rsp, rbp\n  pop rbp\n  ret\n");
+                compiler_write!(self.w, "{}", FN_EPILOG);
                 self.current_env = parent_env;
             }
         }
@@ -426,9 +445,9 @@ impl<W: Write> Compiler<W> {
             "internals.strlen:\n  xor rax,rax\n.loop:\n  cmp byte [rdi], 0\n  je .done\n  inc rax\n  inc rdi\n  jmp .loop\n.done:\n  ret\n"
         );
 
-        compiler_write!(self.w, "data.newline: db 10\n");
-        for (i, data) in self.data.iter().enumerate() {
-            compiler_write!(self.w, "data.{}: {}\n", i, data);
+        compiler_write!(self.w, "data.newline db 10\n");
+        for data in self.data.iter() {
+            compiler_write!(self.w, "{}\n", data);
         }
 
         Ok(())
